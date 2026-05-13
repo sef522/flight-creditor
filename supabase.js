@@ -42,6 +42,34 @@ async function listActiveWatchedFlights() {
   return data || [];
 }
 
+/**
+ * All active watched_flights rows matching confirmation_code (case-insensitive).
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+async function getWatchedFlightByConfirmationCode(code) {
+  const c = String(code || "").trim();
+  if (!c) return [];
+  const { data, error } = await supabase
+    .from("watched_flights")
+    .select("*")
+    .ilike("confirmation_code", c)
+    .eq("active", true)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+async function updatePricePaidPerPerson(id, price) {
+  const { data, error } = await supabase
+    .from("watched_flights")
+    .update({ price_paid_per_person: price })
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 async function deactivateWatchedFlightByConfirmation(confirmationCode) {
   const code = String(confirmationCode || "").trim();
   if (!code) return { count: 0 };
@@ -100,6 +128,8 @@ module.exports = {
   supabase,
   insertWatchedFlight,
   listActiveWatchedFlights,
+  getWatchedFlightByConfirmationCode,
+  updatePricePaidPerPerson,
   deactivateWatchedFlightByConfirmation,
   getActiveWatchedFlightsForMonitoring,
   getLastPriceCheck,
