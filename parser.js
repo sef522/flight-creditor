@@ -13,6 +13,8 @@ flight_date must be ISO YYYY-MM-DD.
 
 Passengers: when an explicit passenger count appears on the confirmation (e.g. "2 passengers", number of travelers, ADT count), use that number. If no explicit passenger count is shown but individual seat assignments are listed for the booking or leg (e.g. 23F, 23E, 24E, 24F), set passengers to the number of distinct seat assignments counted — four distinct seats means passengers 4. Do not default to 1 when seat assignment data is available; only use 1 when the document clearly indicates a single traveler and there is no contradictory seat list.
 
+price_paid_per_person: airline confirmations almost always show the fare per traveler. Copy the numeric fare into price_paid_per_person exactly as printed (same dollars/cents). Do NOT divide a displayed amount by the number of passengers unless the document explicitly labels that amount as a total for everyone (e.g. "total for all passengers", "trip total"). When in doubt, treat the main ticket/fare line as per person.
+
 Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.
 
 Cabin class: output exactly one of BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS. After you determine airline, map fare using ONLY that airline's rules below. Prefer explicit cabin labels on the document over inferred fare class when they conflict. If multiple fare codes appear, use the code that applies to the purchased cabin for that segment.
@@ -60,7 +62,8 @@ const USER_SHAPE = `Return JSON with this exact shape for each leg:
 }
 
 flight_number must be a string of digits only (no airline code prefix).
-Infer passengers from distinct seat assignments when no explicit traveler count is shown (count unique seats; do not assume 1 if seats are listed).`;
+Infer passengers from distinct seat assignments when no explicit traveler count is shown (count unique seats; do not assume 1 if seats are listed).
+price_paid_per_person is the per-person fare as shown; never divide a displayed fare by passenger count unless the document explicitly states it is a group total.`;
 
 function guessMediaType(buffer) {
   if (!buffer || buffer.length < 4) return "image/jpeg";
