@@ -1,0 +1,22 @@
+{
+  "name": "flight-creditor",
+  "version": "1.0.0",
+  "description": "Telegram bot that watches flight bookings for same-cabin price drops",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "postinstall": "playwright install chromium"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.54.0",
+    "@supabase/supabase-js": "^2.49.8",
+    "dotenv": "^16.5.0",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "playwright": "^1.52.0"
+  }
+}
