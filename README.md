@@ -1,6 +1,6 @@
 # flight-creditor
 
-Autonomous agent that ingests airline confirmation screenshots via Telegram, stores watched itineraries in Supabase, and runs a daily Playwright check for same-cabin public fares. When total savings meet your per-ticket threshold, it sends a Telegram alert with a deep link back to the airline booking flow.
+Autonomous agent that ingests airline confirmation screenshots via Telegram, stores watched itineraries in Supabase, and runs a daily **SerpApi Google Flights** lookup for same-cabin public fares. When total savings meet your per-ticket threshold, it sends a Telegram alert with a deep link back to the airline booking flow.
 
 ## Stack
 
@@ -8,7 +8,7 @@ Autonomous agent that ingests airline confirmation screenshots via Telegram, sto
 - Supabase (Postgres) via service role on the server
 - Telegram Bot API (`node-telegram-bot-api`)
 - Anthropic Claude Sonnet 4 (`claude-sonnet-4-20250514`) for vision parsing
-- Playwright (Chromium, headless, no login, no persisted cookies)
+- **SerpApi** (`serpapi` npm package) — `google_flights` engine for fare quotes
 - `node-cron` — daily run at **9:00 AM America/New_York**
 - Railway (`railway.toml` runs `node index.js`)
 
@@ -20,8 +20,6 @@ Autonomous agent that ingests airline confirmation screenshots via Telegram, sto
    cd flight-creditor
    npm install
    ```
-
-   `postinstall` runs `playwright install chromium` (required for fare scrapers).
 
 2. **Supabase**
 
@@ -38,14 +36,18 @@ Autonomous agent that ingests airline confirmation screenshots via Telegram, sto
 
    - Create an API key at [console.anthropic.com](https://console.anthropic.com).
 
-5. **Environment**
+5. **SerpApi**
+
+   - Create an API key at [serpapi.com/manage-api-key](https://serpapi.com/manage-api-key). Fare lookups use the **Google Flights** engine.
+
+6. **Environment**
 
    ```bash
    cp .env.example .env
    # fill in values
    ```
 
-6. **Run locally**
+7. **Run locally**
 
    ```bash
    npm start
@@ -58,6 +60,7 @@ Autonomous agent that ingests airline confirmation screenshots via Telegram, sto
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather. Required. |
 | `TELEGRAM_CHAT_ID` | If set, photo intake and `/list` / `/stop` only apply to this chat id; price alerts are sent here. |
 | `ANTHROPIC_API_KEY` | Claude API key for confirmation screenshot parsing. |
+| `SERPAPI_API_KEY` | SerpApi key for Google Flights fare searches. |
 | `SUPABASE_URL` | Supabase project URL. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server-side only). |
 | `ALERT_THRESHOLD_PER_TICKET` | Dollars saved **per person** before an alert fires; total bar is this times passenger count (default `25`). |
@@ -81,13 +84,13 @@ Autonomous agent that ingests airline confirmation screenshots via Telegram, sto
    ```
 
 3. At the top of the file, call `require("dotenv").config();` so env stays consistent with the rest of the app.
-4. Wire the scraper in `monitor.js` (`pickScraper` switch) and add a `bookingDeepLink` case for alert links.
-5. Keep **30s** overall budget, headless Chromium, **no auth**, swallow errors and return `null`, and **log** the outcome for debugging.
-6. Prefer matching the **same marketed cabin** (not a cheaper bucket) and the **specific flight number** on the requested date.
+4. Use `searchFlights` / `findMatchingGoogleFlightFare` from `scrapers/serpapi.js` (same Google Flights data for all carriers; filter or extend as needed).
+5. Wire the scraper in `monitor.js` (`pickScraper` switch) and add a `bookingDeepLink` case for alert links.
+6. Swallow errors, return `null` on failure, and **log** the outcome for debugging.
 
 ## Notes
 
-- Airline sites change often; scrapers are best-effort DOM heuristics and may return `null` until selectors are updated.
+- Fare data comes from SerpApi’s Google Flights results (`best_flights` / `other_flights`). Results depend on Google’s coverage and your SerpApi plan.
 - When a scraper returns `null`, the monitor **logs and skips** that cycle (no `price_checks` row, since there is no reliable current price).
 - RLS is enabled on both tables with no policies for `anon` / `authenticated`; the service role bypasses RLS for this backend-only workload.
 
