@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
+const ws = require("ws");
 
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -9,7 +10,11 @@ if (!url || !key) {
   console.warn("Supabase: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.");
 }
 
-const supabase = createClient(url || "", key || "");
+const supabase = createClient(url || "", key || "", {
+  realtime: {
+    transport: ws
+  }
+});
 
 function todayIsoDateInEastern() {
   const fmt = new Intl.DateTimeFormat("en-CA", {
