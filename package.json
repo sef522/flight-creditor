@@ -16,6 +16,7 @@
     "dotenv": "^16.5.0",
     "node-cron": "^3.0.3",
     "node-telegram-bot-api": "^0.66.0",
-    "serpapi": "^2.2.1"
+    "serpapi": "^2.2.1",
+    "ws": "^8.18.0"
   }
 }
