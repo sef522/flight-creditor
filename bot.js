@@ -3,7 +3,9 @@ require("dotenv").config();
 const {
   insertWatchedFlight,
   listActiveWatchedFlights,
-  deactivateWatchedFlightByConfirmation
+  deactivateWatchedFlightByConfirmation,
+  getWatchedFlightByConfirmationCode,
+  updatePricePaidPerPerson
 } = require("./supabase");
 const { parseConfirmationImage } = require("./parser");
 
@@ -40,6 +42,12 @@ function isAllowedChat(msg) {
   return String(msg.chat?.id) === String(allow).trim();
 }
 
+function commandRoot(text) {
+  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "";
+  return parts[0].split("@")[0].toLowerCase();
+}
+
 function legLooksValid(leg) {
   return (
     leg &&
@@ -64,6 +72,33 @@ function buildConfirmLine(leg) {
   return `✅ Got it. Monitoring ${iata} ${leg.flight_number} ${leg.origin}→${leg.destination} on ${when} · ${cabin} · ${leg.passengers} passenger${
     leg.passengers === 1 ? "" : "s"
   } · $${paid}/person paid.`;
+}
+
+function parseCodePriceCommand(text, commandPrefix) {
+  const t = String(text || "").trim();
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (parts.length < 3) return null;
+  const cmd = parts[0].split("@")[0].toLowerCase();
+  if (cmd !== commandPrefix.toLowerCase()) return null;
+  const code = parts[1];
+  const priceStr = parts.slice(2).join(" ");
+  const price = Number(priceStr);
+  if (!code || !Number.isFinite(price) || price < 0) return null;
+  return { code, price };
+}
+
+function isPriceUnset(row) {
+  const p = row?.price_paid_per_person;
+  if (p == null || p === "") return true;
+  const n = Number(p);
+  return !Number.isFinite(n) || n === 0;
+}
+
+function buildManualPriceSetLine(row, pricePerPerson) {
+  const iata = AIRLINE_DISPLAY[row.airline] || row.airline;
+  const when = formatShortDate(row.flight_date);
+  const paid = Number(pricePerPerson).toFixed(2);
+  return `✅ Price set. Monitoring ${iata}${row.flight_number} ${row.origin}→${row.destination} on ${when} · ${row.passengers} passengers · $${paid}/person.`;
 }
 
 /**
@@ -104,6 +139,54 @@ function startBot(bot) {
           await bot.sendMessage(msg.chat.id, `No active booking found with confirmation ${code}.`);
         } else {
           await bot.sendMessage(msg.chat.id, `Stopped monitoring ${count} active leg(s) for ${code}.`);
+        }
+        return;
+      }
+
+      if (commandRoot(text) === "/updateprice") {
+        const parsed = parseCodePriceCommand(text, "/updateprice");
+        if (!parsed) {
+          await bot.sendMessage(msg.chat.id, "Usage: /updateprice [confirmation_code] [price_per_person]");
+          return;
+        }
+        const { code, price } = parsed;
+        const rows = await getWatchedFlightByConfirmationCode(code);
+        if (!rows.length) {
+          await bot.sendMessage(msg.chat.id, `⚠️ No flight found with confirmation code ${code}.`);
+          return;
+        }
+        for (const row of rows) {
+          await updatePricePaidPerPerson(row.id, price);
+          await bot.sendMessage(msg.chat.id, buildManualPriceSetLine(row, price));
+        }
+        return;
+      }
+
+      if (commandRoot(text) === "/price") {
+        const parsed = parseCodePriceCommand(text, "/price");
+        if (!parsed) {
+          await bot.sendMessage(msg.chat.id, "Usage: /price [confirmation_code] [price_per_person]");
+          return;
+        }
+        const { code, price } = parsed;
+        const rows = await getWatchedFlightByConfirmationCode(code);
+        if (!rows.length) {
+          await bot.sendMessage(msg.chat.id, `⚠️ No flight found with confirmation code ${code}.`);
+          return;
+        }
+        const existingNonZero = rows.find((r) => !isPriceUnset(r));
+        if (existingNonZero) {
+          const existing = Number(existingNonZero.price_paid_per_person).toFixed(2);
+          const confDisplay = existingNonZero.confirmation_code || code;
+          await bot.sendMessage(
+            msg.chat.id,
+            `⚠️ Price already set to $${existing} for ${confDisplay}. Use /updateprice to change it.`
+          );
+          return;
+        }
+        for (const row of rows) {
+          await updatePricePaidPerPerson(row.id, price);
+          await bot.sendMessage(msg.chat.id, buildManualPriceSetLine(row, price));
         }
         return;
       }
