@@ -13,7 +13,7 @@ flight_date must be ISO YYYY-MM-DD.
 
 Passengers: when an explicit passenger count appears on the confirmation (e.g. "2 passengers", number of travelers, ADT count), use that number. If no explicit passenger count is shown but individual seat assignments are listed for the booking or leg (e.g. 23F, 23E, 24E, 24F), set passengers to the number of distinct seat assignments counted — four distinct seats means passengers 4. Do not default to 1 when seat assignment data is available; only use 1 when the document clearly indicates a single traveler and there is no contradictory seat list.
 
-price_paid_per_person: airline confirmations almost always show the fare per traveler. Copy the numeric fare into price_paid_per_person exactly as printed (same dollars/cents). Do NOT divide a displayed amount by the number of passengers unless the document explicitly labels that amount as a total for everyone (e.g. "total for all passengers", "trip total"). When in doubt, treat the main ticket/fare line as per person.
+price_paid_per_person: When extracting price_paid_per_person, do NOT divide the shown price by the number of passengers. The price shown on an airline confirmation is always the per-person fare unless the document explicitly labels that amount as a group total for everyone. Return the price exactly as shown (same dollars and cents as printed).
 
 Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.
 
@@ -63,7 +63,7 @@ const USER_SHAPE = `Return JSON with this exact shape for each leg:
 
 flight_number must be a string of digits only (no airline code prefix).
 Infer passengers from distinct seat assignments when no explicit traveler count is shown (count unique seats; do not assume 1 if seats are listed).
-price_paid_per_person is the per-person fare as shown; never divide a displayed fare by passenger count unless the document explicitly states it is a group total.`;
+price_paid_per_person: always the per-person fare as shown; do NOT divide by passenger count unless explicitly labeled a group total—return the amount exactly as printed.`;
 
 function guessMediaType(buffer) {
   if (!buffer || buffer.length < 4) return "image/jpeg";
