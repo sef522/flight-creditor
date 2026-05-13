@@ -1,0 +1,187 @@
+require("dotenv").config();
+
+const cron = require("node-cron");
+const {
+  getActiveWatchedFlightsForMonitoring,
+  insertPriceCheck,
+  shouldSkipDuplicateAlert
+} = require("./supabase");
+const { getFare: getDeltaFare } = require("./scrapers/delta");
+const { getFare: getUnitedFare } = require("./scrapers/united");
+const { getFare: getAmericanFare } = require("./scrapers/american");
+const { getFare: getJetBlueFare } = require("./scrapers/jetblue");
+
+const AIRLINE_DISPLAY = {
+  DELTA: "DL",
+  UNITED: "UA",
+  AMERICAN: "AA",
+  JETBLUE: "B6"
+};
+
+const CABIN_DISPLAY = {
+  BASIC_ECONOMY: "Basic Economy",
+  MAIN_CABIN: "Main Cabin",
+  COMFORT_PLUS: "Comfort+",
+  FIRST: "First",
+  BUSINESS: "Business"
+};
+
+function formatShortDate(isoYmd) {
+  try {
+    const [y, m, d] = String(isoYmd).split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(
+      dt
+    );
+  } catch {
+    return isoYmd;
+  }
+}
+
+function alertThresholdPerTicket() {
+  const raw = process.env.ALERT_THRESHOLD_PER_TICKET;
+  const n = raw == null || raw === "" ? 25 : Number(raw);
+  return Number.isFinite(n) ? n : 25;
+}
+
+function bookingDeepLink(airline, origin, destination, flightDate) {
+  const o = encodeURIComponent(origin);
+  const d = encodeURIComponent(destination);
+  const fd = encodeURIComponent(flightDate);
+  switch (airline) {
+    case "DELTA":
+      return `https://www.delta.com/flight-search/book-a-flight?tripType=ONE_WAY&originCity=${o}&destinationCity=${d}&departureDate=${fd}&passengers=1`;
+    case "UNITED":
+      return `https://www.united.com/en/us/fsr/choose-flights?f=${o}&t=${d}&d=${fd}&tt=1&px=1&taxng=1&newHP=True&st=bestmatches`;
+    case "AMERICAN":
+      return `https://www.aa.com/booking/find-flights?from=${o}&to=${d}&date=${fd}&pax=1&adults=1&type=OneWay&tripType=oneway`;
+    case "JETBLUE":
+      return `https://www.jetblue.com/booking/flights?from=${o}&to=${d}&depart=${fd}&isOneWay=true&ADT=1`;
+    default:
+      return "https://www.google.com/flights";
+  }
+}
+
+function pickScraper(airline) {
+  switch (airline) {
+    case "DELTA":
+      return getDeltaFare;
+    case "UNITED":
+      return getUnitedFare;
+    case "AMERICAN":
+      return getAmericanFare;
+    case "JETBLUE":
+      return getJetBlueFare;
+    default:
+      return null;
+  }
+}
+
+function buildAlertText(flight, quote, deltaPerPerson, totalSavings) {
+  const iata = AIRLINE_DISPLAY[flight.airline] || flight.airline;
+  const cabin = CABIN_DISPLAY[flight.cabin_class] || flight.cabin_class;
+  const when = formatShortDate(flight.flight_date);
+  const paid = Number(flight.price_paid_per_person).toFixed(0);
+  const now = Number(quote.pricePerPerson).toFixed(0);
+  const dpp = Number(deltaPerPerson).toFixed(0);
+  const total = Number(totalSavings).toFixed(0);
+  const link = bookingDeepLink(flight.airline, flight.origin, flight.destination, flight.flight_date);
+  return (
+    `✈️ Price Drop Alert\n` +
+    `${iata} ${flight.flight_number} · ${flight.origin} → ${flight.destination} · ${when}\n` +
+    `Cabin: ${cabin}\n` +
+    `Paid: $${paid}/person · Now: $${now}/person\n` +
+    `Savings: $${dpp}/person · $${total} total (${flight.passengers} passengers)\n` +
+    `Confirmation: ${flight.confirmation_code}\n\n` +
+    `Rebook here: ${link}`
+  );
+}
+
+async function runDailyChecks(bot) {
+  const threshold = alertThresholdPerTicket();
+  const flights = await getActiveWatchedFlightsForMonitoring();
+  console.log(`Monitor: evaluating ${flights.length} active flight(s).`);
+
+  for (const flight of flights) {
+    try {
+      const scraper = pickScraper(flight.airline);
+      if (!scraper) {
+        console.warn("Monitor: unknown airline, skipping", flight.id, flight.airline);
+        continue;
+      }
+
+      const quote = await scraper(
+        flight.origin,
+        flight.destination,
+        flight.flight_date,
+        flight.flight_number,
+        flight.cabin_class
+      );
+
+      if (!quote || quote.pricePerPerson == null) {
+        console.log("Monitor: no quote", {
+          id: flight.id,
+          airline: flight.airline,
+          flight: flight.flight_number,
+          route: `${flight.origin}-${flight.destination}`,
+          date: flight.flight_date
+        });
+        continue;
+      }
+
+      const paid = Number(flight.price_paid_per_person);
+      const current = Number(quote.pricePerPerson);
+      const deltaPerPerson = paid - current;
+      const totalSavings = deltaPerPerson * Number(flight.passengers);
+
+      const meetsThreshold = totalSavings >= threshold * Number(flight.passengers);
+      let alertSent = false;
+
+      if (meetsThreshold && deltaPerPerson > 0) {
+        const skipDup = await shouldSkipDuplicateAlert(flight.id, current);
+        if (skipDup) {
+          console.log("Monitor: duplicate alert skipped (same price as last alerted)", {
+            flight_id: flight.id,
+            current
+          });
+        } else if (process.env.TELEGRAM_CHAT_ID) {
+          const text = buildAlertText(flight, quote, deltaPerPerson, totalSavings);
+          await bot.sendMessage(process.env.TELEGRAM_CHAT_ID, text);
+          alertSent = true;
+        } else {
+          console.warn("Monitor: alert would fire but TELEGRAM_CHAT_ID is missing");
+        }
+      }
+
+      await insertPriceCheck({
+        flight_id: flight.id,
+        current_price_per_person: current,
+        delta_per_person: deltaPerPerson,
+        total_savings: totalSavings,
+        alert_sent: alertSent
+      });
+
+      if (alertSent) {
+        console.log("Monitor: alert sent", { flight_id: flight.id, totalSavings, current });
+      }
+    } catch (e) {
+      console.error("Monitor: row error", flight?.id, e);
+    }
+  }
+}
+
+/**
+ * @param {import('node-telegram-bot-api')} bot
+ */
+function startMonitorCron(bot) {
+  cron.schedule(
+    "0 9 * * *",
+    () => {
+      runDailyChecks(bot).catch((e) => console.error("Monitor cron run failed:", e));
+    },
+    { timezone: "America/New_York" }
+  );
+  console.log("Monitor: cron scheduled daily 9:00 AM America/New_York");
+}
+
+module.exports = { startMonitorCron, runDailyChecks };
