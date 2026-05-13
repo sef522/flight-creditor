@@ -2,14 +2,46 @@ require("dotenv").config();
 
 const Anthropic = require("@anthropic-ai/sdk");
 
-const SYSTEM_PROMPT =
-  "You are a flight confirmation parser. Extract structured flight data from airline confirmation screenshots or email screenshots. Return ONLY valid JSON, no preamble, no markdown. " +
-  "If a multi-leg itinerary is detected, parse each leg as a separate object and return a JSON array of objects (not wrapped). " +
-  "If a single itinerary has one leg, return a single JSON object. " +
-  "Normalize airline to one of: DELTA, UNITED, AMERICAN, JETBLUE. " +
-  "Normalize cabin_class to one of: BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS. " +
-  "flight_date must be ISO YYYY-MM-DD. " +
-  "Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.";
+const SYSTEM_PROMPT = `You are a flight confirmation parser. Extract structured flight data from airline confirmation screenshots or email screenshots. Return ONLY valid JSON, no preamble, no markdown.
+If a multi-leg itinerary is detected, parse each leg as a separate object and return a JSON array of objects (not wrapped). If a single itinerary has one leg, return a single JSON object.
+
+Normalize airline to exactly one of: DELTA, UNITED, AMERICAN, JETBLUE.
+
+flight_number: return digits ONLY with no airline prefix or letters (e.g. AA3209 → "3209", DL447 → "447", UA1234 → "1234", B6123 → "123").
+
+flight_date must be ISO YYYY-MM-DD.
+
+Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.
+
+Cabin class: output exactly one of BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS. After you determine airline, map fare using ONLY that airline's rules below. Prefer explicit cabin labels on the document over inferred fare class when they conflict. If multiple fare codes appear, use the code that applies to the purchased cabin for that segment.
+
+--- American Airlines (AMERICAN) ---
+BASIC_ECONOMY: fare class letters B or N; OR text explicitly says "Basic Economy".
+MAIN_CABIN: fare class letters Y, H, K, M, L, V, Q, X, G, S; OR labels "Economy" or "Main Cabin".
+COMFORT_PLUS: American does not sell Comfort+ — never output COMFORT_PLUS for AMERICAN. If you would otherwise map to Comfort+, use MAIN_CABIN.
+FIRST: fare class letters F or A; OR label "First".
+BUSINESS: fare class letters J, C, D, R, or I; OR label "Business".
+
+--- Delta Air Lines (DELTA) ---
+BASIC_ECONOMY: fare class letter E; OR label "Basic Economy".
+MAIN_CABIN: fare class letters Y, B, M, S, H, Q, K, L, U, T, X, V; OR label "Main Cabin".
+COMFORT_PLUS: fare class letters W or G; OR labels "Comfort+" or "Comfort Plus".
+FIRST: fare class letters F, A, or P; OR label "First Class".
+BUSINESS: fare class letters J, C, D, I, or Z; OR labels "Delta One" or "Business".
+
+--- United Airlines (UNITED) ---
+BASIC_ECONOMY: fare class letter N; OR label "Basic Economy".
+MAIN_CABIN: fare class letters Y, B, M, E, U, H, Q, V, W, S, T, L, K, G; OR label "Economy".
+COMFORT_PLUS: United does not offer Comfort+ — never output COMFORT_PLUS for UNITED. If unclear, prefer MAIN_CABIN.
+FIRST: fare class letters F, A, or P; OR label "First".
+BUSINESS: fare class letters J, C, D, Z, P, I, or O; OR labels "Business" or "Polaris". If fare class P appears and context is ambiguous between First and Business, prefer the cabin label shown on the confirmation.
+
+--- JetBlue (JETBLUE) ---
+BASIC_ECONOMY: label "Blue Basic".
+MAIN_CABIN: labels "Blue" or "Blue Extra".
+COMFORT_PLUS: JetBlue does not offer Comfort+ — never output COMFORT_PLUS for JETBLUE; use MAIN_CABIN if needed.
+FIRST: JetBlue does not offer First in this taxonomy — never output FIRST for JETBLUE.
+BUSINESS: label "Mint" (treat Mint suites as BUSINESS).`;
 
 const USER_SHAPE = `Return JSON with this exact shape for each leg:
 {
@@ -23,7 +55,9 @@ const USER_SHAPE = `Return JSON with this exact shape for each leg:
   "passengers": 0,
   "price_paid_per_person": 0.00,
   "confidence": "HIGH|MEDIUM|LOW"
-}`;
+}
+
+flight_number must be a string of digits only (no airline code prefix).`;
 
 function guessMediaType(buffer) {
   if (!buffer || buffer.length < 4) return "image/jpeg";
