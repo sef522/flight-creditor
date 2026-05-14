@@ -115,14 +115,32 @@ function findMatchingGoogleFlightFare(data, flightNumber, cabinClass) {
   }
 
   if (cabinClass === "BASIC_ECONOMY") {
+    let bestIt = null;
+    let bestPrice = Infinity;
     for (const it of matching) {
-      if (!labelHasBasic(it)) continue;
       const n = Number(it.price);
-      if (Number.isFinite(n) && n > 0) {
-        return { pricePerPerson: n, cabinClass };
+      if (!Number.isFinite(n) || n <= 0) continue;
+      if (n < bestPrice) {
+        bestPrice = n;
+        bestIt = it;
       }
     }
-    return null;
+    if (bestIt == null) {
+      console.log("findMatchingGoogleFlightFare BASIC_ECONOMY: no valid price on matching itineraries", {
+        flightDigits: digits,
+        matchingCount: matching.length
+      });
+      return null;
+    }
+    const labelText = itineraryFareLabelText(bestIt);
+    console.log("findMatchingGoogleFlightFare BASIC_ECONOMY: lowest matching economy fare", {
+      flightDigits: digits,
+      matchingCount: matching.length,
+      price: bestPrice,
+      hasBasicLabel: labelHasBasic(bestIt),
+      fareLabels: labelText.length > 280 ? `${labelText.slice(0, 280)}…` : labelText
+    });
+    return { pricePerPerson: bestPrice, cabinClass };
   }
 
   const it0 = matching[0];

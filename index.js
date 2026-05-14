@@ -19,9 +19,6 @@ if (!token) {
 }
 
 const bot = new TelegramBot(token, { polling: true });
-bot.on("polling_error", (err) => {
-  console.error("Telegram polling_error:", err?.message || err);
-});
 startBot(bot);
 startMonitorCron(bot);
 
