@@ -1,6 +1,6 @@
 # flight-creditor
 
-Autonomous agent that watches flight bookings for **same-cabin** price drops: you send **airline confirmation screenshots** over Telegram, it parses them with **Claude**, stores legs in **Supabase**, and each day runs **SerpApi Google Flights** quotes. When savings per ticket clear your threshold, it sends a **Telegram** alert with a link back to the airline’s booking site.
+Autonomous agent that watches flight bookings for **same-cabin** price drops: you send **airline confirmation screenshots** over Telegram, it parses them with **Claude**, stores legs in **Supabase**, and each day runs **SerpApi Google Flights** quotes. When savings per ticket clear your threshold, it sends a **Telegram** alert with a link back to the airline’s booking site. You then cancel your flight and rebook, pocketing the difference as an airline credit. 
 
 ## Stack
 
