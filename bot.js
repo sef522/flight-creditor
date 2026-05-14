@@ -105,6 +105,17 @@ function buildManualPriceSetLine(row, pricePerPerson) {
  * @param {import('node-telegram-bot-api')} bot
  */
 function startBot(bot) {
+  bot.on("polling_error", (err) => {
+    const code = err?.code;
+    const status = err?.response?.statusCode ?? err?.response?.status;
+    if (code === "ETELEGRAM" && status === 409) {
+      console.warn("Bot conflict: another instance is running. This instance will stop polling.");
+      bot.stopPolling();
+      return;
+    }
+    console.error("Telegram polling_error:", err?.message || err);
+  });
+
   bot.on("message", async (msg) => {
     try {
       if (!isAllowedChat(msg)) return;

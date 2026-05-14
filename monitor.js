@@ -77,6 +77,52 @@ function pickScraper(airline) {
   }
 }
 
+function formatMoneyForStatus(n) {
+  if (!Number.isFinite(n)) return "—";
+  const rounded = Math.round(n * 100) / 100;
+  return rounded % 1 === 0 ? `$${rounded.toFixed(0)}` : `$${rounded.toFixed(2)}`;
+}
+
+/**
+ * @param {Array<{ flight: Record<string, unknown>, quote: { pricePerPerson: number } | null }>} pollSnapshot
+ */
+function buildWeeklyStatusMessage(pollSnapshot) {
+  const dateLine = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "America/New_York"
+  }).format(new Date());
+
+  const lines = [
+    "📊 Weekly Status — flight-creditor",
+    `🗓 Sunday check-in · ${dateLine}`,
+    "",
+    `Flights monitored: ${pollSnapshot.length}`
+  ];
+
+  for (const { flight, quote } of pollSnapshot) {
+    const iata = AIRLINE_DISPLAY[flight.airline] || flight.airline;
+    const when = formatShortDate(flight.flight_date);
+    lines.push(
+      `✈️ ${iata} ${flight.flight_number} · ${flight.origin}→${flight.destination} · ${when}`
+    );
+    if (!quote || quote.pricePerPerson == null) {
+      lines.push("   No quote available today");
+      continue;
+    }
+    const paid = Number(flight.price_paid_per_person);
+    const current = Number(quote.pricePerPerson);
+    const paidStr = formatMoneyForStatus(paid);
+    const currentStr = formatMoneyForStatus(current);
+    const dropped = Number.isFinite(paid) && Number.isFinite(current) && current < paid;
+    lines.push(`   Paid: ${paidStr} · Current: ${currentStr} · ${dropped ? "Drop" : "No drop"}`);
+  }
+
+  lines.push("", "Next check: tomorrow 9:00 AM ET");
+  return lines.join("\n");
+}
+
 function buildAlertText(flight, quote, deltaPerPerson, totalSavings) {
   const iata = AIRLINE_DISPLAY[flight.airline] || flight.airline;
   const cabin = CABIN_DISPLAY[flight.cabin_class] || flight.cabin_class;
@@ -102,15 +148,20 @@ async function runDailyChecks(bot) {
   const flights = await getActiveWatchedFlightsForMonitoring();
   console.log(`Monitor: evaluating ${flights.length} active flight(s).`);
 
+  /** @type {Array<{ flight: (typeof flights)[number], quote: { pricePerPerson: number } | null }>} */
+  const pollSnapshot = [];
+
   for (const flight of flights) {
+    let quote = null;
     try {
       const scraper = pickScraper(flight.airline);
       if (!scraper) {
         console.warn("Monitor: unknown airline, skipping", flight.id, flight.airline);
+        pollSnapshot.push({ flight, quote: null });
         continue;
       }
 
-      const quote = await scraper(
+      quote = await scraper(
         flight.origin,
         flight.destination,
         flight.flight_date,
@@ -126,6 +177,7 @@ async function runDailyChecks(bot) {
           route: `${flight.origin}-${flight.destination}`,
           date: flight.flight_date
         });
+        pollSnapshot.push({ flight, quote: null });
         continue;
       }
 
@@ -164,8 +216,21 @@ async function runDailyChecks(bot) {
       if (alertSent) {
         console.log("Monitor: alert sent", { flight_id: flight.id, totalSavings, current });
       }
+
+      pollSnapshot.push({ flight, quote });
     } catch (e) {
       console.error("Monitor: row error", flight?.id, e);
+      pollSnapshot.push({ flight, quote: quote && quote.pricePerPerson != null ? quote : null });
+    }
+  }
+
+  if (new Date().getDay() === 0 && process.env.TELEGRAM_CHAT_ID) {
+    try {
+      const text = buildWeeklyStatusMessage(pollSnapshot);
+      await bot.sendMessage(process.env.TELEGRAM_CHAT_ID, text);
+      console.log("Monitor: weekly status message sent (Sunday).");
+    } catch (e) {
+      console.error("Monitor: weekly status send failed:", e);
     }
   }
 }
