@@ -11,7 +11,7 @@ You DM the bot a photo of your airline confirmation. Claude reads the screenshot
 ## Features
 
 - Screenshot intake — no manual form-filling for confirmations
-- Same-cabin fare checks against what you paid
+- Same-cabin fare checks against what you paid (Google Flights data for **any** airline)
 - Daily run (9am Eastern) for active future flights
 - `/list`, `/stop`, `/price`, `/updateprice` for managing watches
 - Optional lock to a single Telegram chat (handy if the bot is “yours”)
@@ -35,7 +35,7 @@ You DM the bot a photo of your airline confirmation. Claude reads the screenshot
    npm install
    ```
 
-2. **Supabase** — Create a project, open the SQL editor (or use the CLI), and run the migration in `supabase/migrations/20250512120000_initial_flight_creditor.sql`. Copy the project **URL** and **service_role** key (server-side only; never put that in a browser app).
+2. **Supabase** — Create a project, open the SQL editor (or use the CLI), and run the SQL migrations **in order**: `supabase/migrations/20250512120000_initial_flight_creditor.sql`, then `supabase/migrations/20250514120000_remove_airline_constraint.sql`. Copy the project **URL** and **service_role** key (server-side only; never put that in a browser app).
 
 3. **Telegram** — Talk to [@BotFather](https://t.me/BotFather), `/newbot`, and copy the bot token.
 
@@ -69,7 +69,7 @@ Local smoke test: `npm start` with `.env` in place.
 
 Default is **`ALERT_THRESHOLD_PER_TICKET=25`**: the public fare has to be at least **$25 less per person** than the price you saved (same math no matter how many passengers — it’s a per-ticket bar).
 
-Nothing auto-cancels or auto-rebooks. You get a Telegram nudge, then you handle cancel / credit / rebook on the airline if it’s still worth it. The message includes a **deep link** straight into that carrier’s flight search so you’re not digging through menus.
+Nothing auto-cancels or auto-rebooks. You get a Telegram nudge, then you handle cancel / credit / rebook on the airline if it’s still worth it. Alerts include a **deep link**: Delta, United, American, and JetBlue get that airline’s own search URL; every other carrier gets a **Google Flights** search for the same route and date.
 
 Set `TELEGRAM_CHAT_ID` or you won’t get pings — the bot only sends alerts to that chat.
 
@@ -85,9 +85,9 @@ Set `TELEGRAM_CHAT_ID` or you won’t get pings — the bot only sends alerts to
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (server only) |
 | `ALERT_THRESHOLD_PER_TICKET` | Min per-person savings toward an alert, in USD (default `25`) |
 
-## Supported airlines
+## Airlines
 
-Delta, United, American, JetBlue.
+Any airline works. The parser records an **IATA-style code** (e.g. `BA`, `LH`) or a short name when that’s clearer; Delta, United, American, and JetBlue are still normalized to `DELTA`, `UNITED`, `AMERICAN`, and `JETBLUE` so cabin rules and booking links stay accurate. Fare checks use **Google Flights via SerpApi** for every carrier — same engine as before, not a per-airline scraper.
 
 ## Contributing
 

@@ -6,10 +6,7 @@ const {
   insertPriceCheck,
   shouldSkipDuplicateAlert
 } = require("./supabase");
-const { getFare: getDeltaFare } = require("./scrapers/delta");
-const { getFare: getUnitedFare } = require("./scrapers/united");
-const { getFare: getAmericanFare } = require("./scrapers/american");
-const { getFare: getJetBlueFare } = require("./scrapers/jetblue");
+const { getFare } = require("./scrapers/generic");
 
 const AIRLINE_DISPLAY = {
   DELTA: "DL",
@@ -44,6 +41,14 @@ function alertThresholdPerTicket() {
   return Number.isFinite(n) ? n : 25;
 }
 
+function googleFlightsDeepLink(origin, destination, flightDate) {
+  const o = String(origin || "").trim().toUpperCase();
+  const d = String(destination || "").trim().toUpperCase();
+  const fd = String(flightDate || "").trim();
+  const q = `One way from ${o} to ${d} on ${fd}`;
+  return `https://www.google.com/travel/flights?q=${encodeURIComponent(q)}`;
+}
+
 function bookingDeepLink(airline, origin, destination, flightDate) {
   const o = encodeURIComponent(origin);
   const d = encodeURIComponent(destination);
@@ -58,22 +63,7 @@ function bookingDeepLink(airline, origin, destination, flightDate) {
     case "JETBLUE":
       return `https://www.jetblue.com/booking/flights?from=${o}&to=${d}&depart=${fd}&isOneWay=true&ADT=1`;
     default:
-      return "https://www.google.com/flights";
-  }
-}
-
-function pickScraper(airline) {
-  switch (airline) {
-    case "DELTA":
-      return getDeltaFare;
-    case "UNITED":
-      return getUnitedFare;
-    case "AMERICAN":
-      return getAmericanFare;
-    case "JETBLUE":
-      return getJetBlueFare;
-    default:
-      return null;
+      return googleFlightsDeepLink(origin, destination, flightDate);
   }
 }
 
@@ -154,14 +144,7 @@ async function runDailyChecks(bot) {
   for (const flight of flights) {
     let quote = null;
     try {
-      const scraper = pickScraper(flight.airline);
-      if (!scraper) {
-        console.warn("Monitor: unknown airline, skipping", flight.id, flight.airline);
-        pollSnapshot.push({ flight, quote: null });
-        continue;
-      }
-
-      quote = await scraper(
+      quote = await getFare(
         flight.origin,
         flight.destination,
         flight.flight_date,

@@ -5,7 +5,9 @@ const Anthropic = require("@anthropic-ai/sdk");
 const SYSTEM_PROMPT = `You are a flight confirmation parser. Extract structured flight data from airline confirmation screenshots or email screenshots. Return ONLY valid JSON, no preamble, no markdown.
 If a multi-leg itinerary is detected, parse each leg as a separate object and return a JSON array of objects (not wrapped). If a single itinerary has one leg, return a single JSON object.
 
-Normalize airline to exactly one of: DELTA, UNITED, AMERICAN, JETBLUE.
+airline: Return a single clean UPPERCASE token with no spaces.
+- For Delta Air Lines, United Airlines, American Airlines, or JetBlue, use exactly DELTA, UNITED, AMERICAN, or JETBLUE respectively (these four are the canonical codes this system expects for those carriers).
+- For every other carrier: use the IATA airline designator when it is visible or clearly inferable (2 letters, e.g. BA, EK, LH, QF, FR, WN). If no IATA code is available, use a short UPPERCASE ASCII name derived from the airline (e.g. EASYJET, RYANAIR, NORWEGIAN).
 
 flight_number: return digits ONLY with no airline prefix or letters (e.g. AA3209 → "3209", DL447 → "447", UA1234 → "1234", B6123 → "123").
 
@@ -17,7 +19,9 @@ price_paid_per_person: When extracting price_paid_per_person, do NOT divide the 
 
 Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.
 
-Cabin class: output exactly one of BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS. After you determine airline, map fare using ONLY that airline's rules below. Prefer explicit cabin labels on the document over inferred fare class when they conflict. If multiple fare codes appear, use the code that applies to the purchased cabin for that segment.
+Cabin class: output exactly one of BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS.
+- If airline is AMERICAN, DELTA, UNITED, or JETBLUE, map fare using ONLY that airline's rules in the sections below (prefer explicit cabin labels on the document over inferred fare class when they conflict; if multiple fare codes appear, use the code that applies to the purchased cabin for that segment).
+- For ALL other airlines, use ONLY the "All other airlines" cabin rules at the end — do not apply the US-carrier fare-class letter tables to non-US carriers.
 
 --- American Airlines (AMERICAN) ---
 BASIC_ECONOMY: fare class letters B or N; OR text explicitly says "Basic Economy".
@@ -45,7 +49,16 @@ BASIC_ECONOMY: label "Blue Basic".
 MAIN_CABIN: labels "Blue" or "Blue Extra".
 COMFORT_PLUS: JetBlue does not offer Comfort+ — never output COMFORT_PLUS for JETBLUE; use MAIN_CABIN if needed.
 FIRST: JetBlue does not offer First in this taxonomy — never output FIRST for JETBLUE.
-BUSINESS: label "Mint" (treat Mint suites as BUSINESS).`;
+BUSINESS: label "Mint" (treat Mint suites as BUSINESS).
+
+--- All other airlines (any carrier other than AMERICAN, DELTA, UNITED, JETBLUE) ---
+Apply these rules to the cabin/fare/product labels shown for the purchased segment. Matching is case-insensitive on label text. When rules overlap, prefer the more specific restrictive bucket (e.g. "basic" before generic "economy"); use best judgment when ambiguous.
+
+BASIC_ECONOMY: label contains any of: "basic", "light", "saver", "restricted".
+BUSINESS: label contains any of: "business", "club", "marco polo", "senator".
+FIRST: label contains "first" (but not as a substring of unrelated words if avoidable — prefer clear "First" product names).
+COMFORT_PLUS: label contains any of: "premium", "comfort", "plus", "extra" — unless "basic", "light", "saver", or "restricted" also applies to the same product, in which case use BASIC_ECONOMY.
+MAIN_CABIN: default for standard economy / coach / economy products that do not match BASIC_ECONOMY, COMFORT_PLUS, FIRST, or BUSINESS above.`;
 
 const USER_SHAPE = `Return JSON with this exact shape for each leg:
 {
