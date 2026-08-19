@@ -108,18 +108,16 @@ function parseModelJson(text) {
 }
 
 /**
- * @param {Buffer} imageBuffer
+ * @param {object} mediaBlock image or document content block
  * @returns {Promise<{ legs: object[], rawText: string }>}
  */
-async function parseConfirmationImage(imageBuffer) {
+async function parseConfirmationFromMedia(mediaBlock) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is not set");
   }
 
   const client = new Anthropic({ apiKey });
-  const base64 = Buffer.from(imageBuffer).toString("base64");
-  const mediaType = guessMediaType(imageBuffer);
 
   const message = await client.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -129,14 +127,7 @@ async function parseConfirmationImage(imageBuffer) {
       {
         role: "user",
         content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: base64
-            }
-          },
+          mediaBlock,
           {
             type: "text",
             text: USER_SHAPE
@@ -153,6 +144,42 @@ async function parseConfirmationImage(imageBuffer) {
   return { legs, rawText };
 }
 
+/**
+ * @param {Buffer} imageBuffer
+ * @returns {Promise<{ legs: object[], rawText: string }>}
+ */
+async function parseConfirmationImage(imageBuffer) {
+  const base64 = Buffer.from(imageBuffer).toString("base64");
+  const mediaType = guessMediaType(imageBuffer);
+
+  return parseConfirmationFromMedia({
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: mediaType,
+      data: base64
+    }
+  });
+}
+
+/**
+ * @param {Buffer} pdfBuffer
+ * @returns {Promise<{ legs: object[], rawText: string }>}
+ */
+async function parseConfirmationPdf(pdfBuffer) {
+  const base64Pdf = Buffer.from(pdfBuffer).toString("base64");
+
+  return parseConfirmationFromMedia({
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: "application/pdf",
+      data: base64Pdf
+    }
+  });
+}
+
 module.exports = {
-  parseConfirmationImage
+  parseConfirmationImage,
+  parseConfirmationPdf
 };
