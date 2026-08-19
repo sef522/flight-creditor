@@ -102,39 +102,93 @@ function stripJsonFence(text) {
 }
 
 function parseModelJson(text) {
+  console.log("parseModelJson: raw text before JSON.parse", text);
   const raw = stripJsonFence(text);
-  const parsed = JSON.parse(raw);
-  return parsed;
+  if (raw !== String(text || "").trim()) {
+    console.log("parseModelJson: text after markdown fence strip", raw);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("parseModelJson: JSON.parse failed", {
+      message: e?.message,
+      raw
+    });
+    throw e;
+  }
+}
+
+function summarizeUserContent(userContent) {
+  return (userContent || []).map((block) => ({
+    type: block?.type,
+    mediaType: block?.source?.media_type,
+    textLength: block?.type === "text" ? String(block.text || "").length : undefined
+  }));
 }
 
 /**
  * @param {object[]} userContent Claude user content blocks
+ * @param {string} [source]
  * @returns {Promise<{ legs: object[], rawText: string }>}
  */
-async function parseConfirmationFromUserContent(userContent) {
+async function parseConfirmationFromUserContent(userContent, source = "unknown") {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is not set");
   }
 
+  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
   const client = new Anthropic({ apiKey });
-
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: userContent
-      }
-    ]
+  console.log("Claude parse starting", {
+    source,
+    model,
+    blocks: summarizeUserContent(userContent)
   });
 
-  const textBlock = message.content.find((b) => b.type === "text");
+  let message;
+  try {
+    message = await client.messages.create({
+      model,
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: userContent
+        }
+      ]
+    });
+  } catch (e) {
+    console.error("Claude API call failed", {
+      source,
+      name: e?.name,
+      message: e?.message,
+      status: e?.status,
+      type: e?.error?.type,
+      error: e?.error
+    });
+    throw e;
+  }
+
+  console.log("Claude API raw response", {
+    source,
+    id: message.id,
+    model: message.model,
+    stopReason: message.stop_reason,
+    usage: message.usage,
+    contentTypes: (message.content || []).map((b) => b.type),
+    content: message.content
+  });
+
+  const textBlock = (message.content || []).find((b) => b.type === "text");
   const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "";
+  if (message.stop_reason === "max_tokens") {
+    console.warn("Claude response may be truncated (stop_reason=max_tokens)", { source, rawText });
+  }
+
   const parsed = parseModelJson(rawText);
   const legs = Array.isArray(parsed) ? parsed : [parsed];
+  console.log("Claude parsed legs", { source, count: legs.length, legs });
   return { legs, rawText };
 }
 
@@ -142,14 +196,17 @@ async function parseConfirmationFromUserContent(userContent) {
  * @param {object} mediaBlock image or document content block
  * @returns {Promise<{ legs: object[], rawText: string }>}
  */
-async function parseConfirmationFromMedia(mediaBlock) {
-  return parseConfirmationFromUserContent([
-    mediaBlock,
-    {
-      type: "text",
-      text: USER_SHAPE
-    }
-  ]);
+async function parseConfirmationFromMedia(mediaBlock, source) {
+  return parseConfirmationFromUserContent(
+    [
+      mediaBlock,
+      {
+        type: "text",
+        text: USER_SHAPE
+      }
+    ],
+    source
+  );
 }
 
 /**
@@ -160,14 +217,17 @@ async function parseConfirmationImage(imageBuffer) {
   const base64 = Buffer.from(imageBuffer).toString("base64");
   const mediaType = guessMediaType(imageBuffer);
 
-  return parseConfirmationFromMedia({
-    type: "image",
-    source: {
-      type: "base64",
-      media_type: mediaType,
-      data: base64
-    }
-  });
+  return parseConfirmationFromMedia(
+    {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: mediaType,
+        data: base64
+      }
+    },
+    "image"
+  );
 }
 
 /**
@@ -177,14 +237,17 @@ async function parseConfirmationImage(imageBuffer) {
 async function parseConfirmationPdf(pdfBuffer) {
   const base64Pdf = Buffer.from(pdfBuffer).toString("base64");
 
-  return parseConfirmationFromMedia({
-    type: "document",
-    source: {
-      type: "base64",
-      media_type: "application/pdf",
-      data: base64Pdf
-    }
-  });
+  return parseConfirmationFromMedia(
+    {
+      type: "document",
+      source: {
+        type: "base64",
+        media_type: "application/pdf",
+        data: base64Pdf
+      }
+    },
+    "pdf"
+  );
 }
 
 /**
@@ -192,12 +255,15 @@ async function parseConfirmationPdf(pdfBuffer) {
  * @returns {Promise<{ legs: object[], rawText: string }>}
  */
 async function parseConfirmationText(confirmationText) {
-  return parseConfirmationFromUserContent([
-    {
-      type: "text",
-      text: `${USER_SHAPE}\n\n${String(confirmationText || "")}`
-    }
-  ]);
+  return parseConfirmationFromUserContent(
+    [
+      {
+        type: "text",
+        text: `${USER_SHAPE}\n\n${String(confirmationText || "")}`
+      }
+    ],
+    "text"
+  );
 }
 
 module.exports = {
