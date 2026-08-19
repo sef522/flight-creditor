@@ -7,7 +7,7 @@ const {
   getWatchedFlightByConfirmationCode,
   updatePricePaidPerPerson
 } = require("./supabase");
-const { parseConfirmationImage, parseConfirmationPdf } = require("./parser");
+const { parseConfirmationImage, parseConfirmationPdf, parseConfirmationText } = require("./parser");
 
 const AIRLINE_DISPLAY = {
   DELTA: "DL",
@@ -48,20 +48,44 @@ function commandRoot(text) {
   return parts[0].split("@")[0].toLowerCase();
 }
 
+function missingLegFields(leg) {
+  const missing = [];
+  if (!leg || !leg.confirmation_code) missing.push("confirmation code");
+  if (!leg || !leg.airline) missing.push("airline");
+  if (!leg || !leg.flight_number) missing.push("flight number");
+  if (!leg || !leg.origin) missing.push("origin");
+  if (!leg || !leg.destination) missing.push("destination");
+  if (!leg || !leg.flight_date) missing.push("flight date");
+  if (!leg || !leg.cabin_class) missing.push("cabin class");
+  if (!leg || typeof leg.passengers !== "number" || leg.passengers <= 0) {
+    missing.push("passenger count");
+  }
+  if (!leg || typeof leg.price_paid_per_person !== "number") {
+    missing.push("price paid per person");
+  }
+  return missing;
+}
+
 function legLooksValid(leg) {
-  return (
-    leg &&
-    leg.confirmation_code &&
-    leg.airline &&
-    leg.flight_number &&
-    leg.origin &&
-    leg.destination &&
-    leg.flight_date &&
-    leg.cabin_class &&
-    typeof leg.passengers === "number" &&
-    leg.passengers > 0 &&
-    typeof leg.price_paid_per_person === "number"
-  );
+  return missingLegFields(leg).length === 0;
+}
+
+function formatMissingFieldsReply(legs) {
+  const lines = [];
+  const list = Array.isArray(legs) ? legs : [];
+  if (!list.length) {
+    return "⚠️ Couldn't parse that confirmation. No flight details were found. Paste the full confirmation email, or send a screenshot or PDF.";
+  }
+  for (let i = 0; i < list.length; i++) {
+    const missing = missingLegFields(list[i]);
+    if (!missing.length) continue;
+    const prefix = list.length > 1 ? `Leg ${i + 1}: ` : "";
+    lines.push(`${prefix}${missing.join(", ")}`);
+  }
+  if (!lines.length) {
+    return "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot.";
+  }
+  return `⚠️ Couldn't parse that confirmation. Missing: ${lines.join("; ")}. Paste the full confirmation email, or send a screenshot or PDF.`;
 }
 
 function buildConfirmLine(leg) {
@@ -102,12 +126,13 @@ function buildManualPriceSetLine(row, pricePerPerson) {
 }
 
 /**
- * Shared ingest for photo and PDF confirmation intake.
+ * Shared ingest for photo, PDF, and text confirmation intake.
  * @param {import('node-telegram-bot-api')} bot
  * @param {import('node-telegram-bot-api').Message} msg
  * @param {object[]} legs
+ * @param {{ reportMissingFields?: boolean }} [options]
  */
-async function ingestParsedLegs(bot, msg, legs) {
+async function ingestParsedLegs(bot, msg, legs, options = {}) {
   const telegramUserId = msg.from?.id != null ? String(msg.from.id) : null;
   const inserted = [];
   for (const leg of legs) {
@@ -138,10 +163,10 @@ async function ingestParsedLegs(bot, msg, legs) {
   }
 
   if (!inserted.length) {
-    await bot.sendMessage(
-      msg.chat.id,
-      "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-    );
+    const reply = options.reportMissingFields
+      ? formatMissingFieldsReply(legs)
+      : "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot.";
+    await bot.sendMessage(msg.chat.id, reply);
     return;
   }
 
@@ -174,6 +199,14 @@ function startBot(bot) {
           fileName: msg.document.file_name,
           fileId: msg.document.file_id,
           fileSize: msg.document.file_size
+        });
+      }
+
+      if (msg.text) {
+        console.log("Telegram text update received", {
+          chatId: msg.chat?.id,
+          textLength: String(msg.text).length,
+          startsWithSlash: String(msg.text).trim().startsWith("/")
         });
       }
 
@@ -300,6 +333,29 @@ function startBot(bot) {
         }
 
         await ingestParsedLegs(bot, msg, pdfLegs);
+        return;
+      }
+
+      if (text && !text.startsWith("/")) {
+        console.log("Entering text intake branch", {
+          chatId: msg.chat?.id,
+          textLength: text.length
+        });
+
+        let textLegs;
+        try {
+          const parsed = await parseConfirmationText(text);
+          textLegs = parsed.legs;
+        } catch (e) {
+          console.error("parseConfirmationText failed:", e);
+          await bot.sendMessage(
+            msg.chat.id,
+            "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
+          );
+          return;
+        }
+
+        await ingestParsedLegs(bot, msg, textLegs, { reportMissingFields: true });
         return;
       }
 
