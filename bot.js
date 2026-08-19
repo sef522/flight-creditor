@@ -9,6 +9,9 @@ const {
 } = require("./supabase");
 const { parseConfirmationImage, parseConfirmationPdf, parseConfirmationText } = require("./parser");
 
+const GENERIC_PARSE_REPLY =
+  "⚠️ Couldn't parse that confirmation. Please try again, or send a screenshot, PDF, or the full email text.";
+
 const AIRLINE_DISPLAY = {
   DELTA: "DL",
   UNITED: "UA",
@@ -66,8 +69,21 @@ function missingLegFields(leg) {
   return missing;
 }
 
-function legLooksValid(leg) {
-  return missingLegFields(leg).length === 0;
+function legFieldSnapshot(leg) {
+  return {
+    confirmation_code: leg?.confirmation_code ?? null,
+    airline: leg?.airline ?? null,
+    flight_number: leg?.flight_number ?? null,
+    origin: leg?.origin ?? null,
+    destination: leg?.destination ?? null,
+    flight_date: leg?.flight_date ?? null,
+    cabin_class: leg?.cabin_class ?? null,
+    passengers: leg?.passengers ?? null,
+    passengersType: typeof leg?.passengers,
+    price_paid_per_person: leg?.price_paid_per_person ?? null,
+    priceType: typeof leg?.price_paid_per_person,
+    confidence: leg?.confidence ?? null
+  };
 }
 
 function formatMissingFieldsReply(legs) {
@@ -83,7 +99,7 @@ function formatMissingFieldsReply(legs) {
     lines.push(`${prefix}${missing.join(", ")}`);
   }
   if (!lines.length) {
-    return "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot.";
+    return GENERIC_PARSE_REPLY;
   }
   return `⚠️ Couldn't parse that confirmation. Missing: ${lines.join("; ")}. Paste the full confirmation email, or send a screenshot or PDF.`;
 }
@@ -130,18 +146,40 @@ function buildManualPriceSetLine(row, pricePerPerson) {
  * @param {import('node-telegram-bot-api')} bot
  * @param {import('node-telegram-bot-api').Message} msg
  * @param {object[]} legs
- * @param {{ reportMissingFields?: boolean }} [options]
  */
-async function ingestParsedLegs(bot, msg, legs, options = {}) {
+async function ingestParsedLegs(bot, msg, legs) {
   const telegramUserId = msg.from?.id != null ? String(msg.from.id) : null;
   const inserted = [];
-  for (const leg of legs) {
-    if (!legLooksValid(leg)) continue;
+  const list = Array.isArray(legs) ? legs : [];
+  console.log("ingestParsedLegs: validating extracted legs", {
+    count: list.length,
+    legs: list.map((leg, index) => ({
+      index,
+      missing: missingLegFields(leg),
+      fields: legFieldSnapshot(leg)
+    }))
+  });
+
+  for (let i = 0; i < list.length; i++) {
+    const leg = list[i];
+    const missing = missingLegFields(leg);
+    if (missing.length) {
+      console.warn("ingestParsedLegs: leg failed schema validation", {
+        index: i,
+        missing,
+        fields: legFieldSnapshot(leg)
+      });
+      continue;
+    }
     const conf = String(leg.confidence || "").toUpperCase();
     if (conf === "LOW") {
+      console.warn("ingestParsedLegs: leg rejected for LOW confidence", {
+        index: i,
+        fields: legFieldSnapshot(leg)
+      });
       await bot.sendMessage(
         msg.chat.id,
-        "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
+        "⚠️ Couldn't parse that confirmation with enough confidence. Please send a clearer screenshot, the full PDF, or the full email text."
       );
       return;
     }
@@ -163,10 +201,15 @@ async function ingestParsedLegs(bot, msg, legs, options = {}) {
   }
 
   if (!inserted.length) {
-    const reply = options.reportMissingFields
-      ? formatMissingFieldsReply(legs)
-      : "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot.";
-    await bot.sendMessage(msg.chat.id, reply);
+    console.warn("ingestParsedLegs: no valid legs to insert", {
+      count: list.length,
+      missingByLeg: list.map((leg, index) => ({
+        index,
+        missing: missingLegFields(leg),
+        fields: legFieldSnapshot(leg)
+      }))
+    });
+    await bot.sendMessage(msg.chat.id, formatMissingFieldsReply(list));
     return;
   }
 
@@ -325,10 +368,7 @@ function startBot(bot) {
           pdfLegs = parsed.legs;
         } catch (e) {
           console.error("parseConfirmationPdf failed:", e);
-          await bot.sendMessage(
-            msg.chat.id,
-            "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-          );
+          await bot.sendMessage(msg.chat.id, GENERIC_PARSE_REPLY);
           return;
         }
 
@@ -348,14 +388,11 @@ function startBot(bot) {
           textLegs = parsed.legs;
         } catch (e) {
           console.error("parseConfirmationText failed:", e);
-          await bot.sendMessage(
-            msg.chat.id,
-            "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-          );
+          await bot.sendMessage(msg.chat.id, GENERIC_PARSE_REPLY);
           return;
         }
 
-        await ingestParsedLegs(bot, msg, textLegs, { reportMissingFields: true });
+        await ingestParsedLegs(bot, msg, textLegs);
         return;
       }
 
@@ -379,10 +416,7 @@ function startBot(bot) {
         legs = parsed.legs;
       } catch (e) {
         console.error("parseConfirmationImage failed:", e);
-        await bot.sendMessage(
-          msg.chat.id,
-          "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-        );
+        await bot.sendMessage(msg.chat.id, GENERIC_PARSE_REPLY);
         return;
       }
 
