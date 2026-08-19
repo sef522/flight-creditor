@@ -17,6 +17,11 @@ Passengers: when an explicit passenger count appears on the confirmation (e.g. "
 
 price_paid_per_person: When extracting price_paid_per_person, do NOT divide the shown price by the number of passengers. The price shown on an airline confirmation is always the per-person fare unless the document explicitly labels that amount as a group total for everyone. Return the price exactly as shown (same dollars and cents as printed).
 
+fare_presentation: For multi-leg itineraries, report HOW the document presents fare — do not infer this from whether the numbers happen to be equal.
+- "combined_total": the document shows one fare total covering both legs / the whole itinerary, with no per-leg price breakdown (one line item, one charge). Copy that same combined total onto each leg's price_paid_per_person.
+- "itemized_per_leg": the document shows a distinct fare amount for each leg individually. Use each leg's shown amount even if those two amounts happen to be equal.
+- For a one-way / single-leg itinerary, omit fare_presentation or set it to null.
+
 Include confidence as HIGH, MEDIUM, or LOW. If confidence is LOW, still return the best-effort object.
 
 Cabin class: output exactly one of BASIC_ECONOMY, MAIN_CABIN, COMFORT_PLUS, FIRST, BUSINESS.
@@ -71,12 +76,14 @@ const USER_SHAPE = `Return JSON with this exact shape for each leg:
   "cabin_class": "",
   "passengers": 0,
   "price_paid_per_person": 0.00,
+  "fare_presentation": "combined_total|itemized_per_leg|null",
   "confidence": "HIGH|MEDIUM|LOW"
 }
 
 flight_number must be a string of digits only (no airline code prefix).
 Infer passengers from distinct seat assignments when no explicit traveler count is shown (count unique seats; do not assume 1 if seats are listed).
-price_paid_per_person: always the per-person fare as shown; do NOT divide by passenger count unless explicitly labeled a group total—return the amount exactly as printed.`;
+price_paid_per_person: always the per-person fare as shown; do NOT divide by passenger count unless explicitly labeled a group total—return the amount exactly as printed.
+fare_presentation: look at document layout, not whether amounts match. Use "combined_total" when one charge covers both legs with no per-leg breakdown (put that same total on each leg). Use "itemized_per_leg" when each leg has its own shown fare, even if the two fares are equal. For a one-way / single-leg itinerary, omit fare_presentation or set it to null.`;
 
 function guessMediaType(buffer) {
   if (!buffer || buffer.length < 4) return "image/jpeg";
