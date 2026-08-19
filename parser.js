@@ -108,10 +108,10 @@ function parseModelJson(text) {
 }
 
 /**
- * @param {object} mediaBlock image or document content block
+ * @param {object[]} userContent Claude user content blocks
  * @returns {Promise<{ legs: object[], rawText: string }>}
  */
-async function parseConfirmationFromMedia(mediaBlock) {
+async function parseConfirmationFromUserContent(userContent) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY is not set");
@@ -126,13 +126,7 @@ async function parseConfirmationFromMedia(mediaBlock) {
     messages: [
       {
         role: "user",
-        content: [
-          mediaBlock,
-          {
-            type: "text",
-            text: USER_SHAPE
-          }
-        ]
+        content: userContent
       }
     ]
   });
@@ -142,6 +136,20 @@ async function parseConfirmationFromMedia(mediaBlock) {
   const parsed = parseModelJson(rawText);
   const legs = Array.isArray(parsed) ? parsed : [parsed];
   return { legs, rawText };
+}
+
+/**
+ * @param {object} mediaBlock image or document content block
+ * @returns {Promise<{ legs: object[], rawText: string }>}
+ */
+async function parseConfirmationFromMedia(mediaBlock) {
+  return parseConfirmationFromUserContent([
+    mediaBlock,
+    {
+      type: "text",
+      text: USER_SHAPE
+    }
+  ]);
 }
 
 /**
@@ -179,7 +187,21 @@ async function parseConfirmationPdf(pdfBuffer) {
   });
 }
 
+/**
+ * @param {string} confirmationText
+ * @returns {Promise<{ legs: object[], rawText: string }>}
+ */
+async function parseConfirmationText(confirmationText) {
+  return parseConfirmationFromUserContent([
+    {
+      type: "text",
+      text: `${USER_SHAPE}\n\n${String(confirmationText || "")}`
+    }
+  ]);
+}
+
 module.exports = {
   parseConfirmationImage,
-  parseConfirmationPdf
+  parseConfirmationPdf,
+  parseConfirmationText
 };
