@@ -8,6 +8,7 @@ const {
   updatePricePaidPerPerson
 } = require("./supabase");
 const { parseConfirmationImage, parseConfirmationPdf, parseConfirmationText } = require("./parser");
+const { assignFareBaselines, logIntakeFareBaselines } = require("./fareBaseline");
 
 const GENERIC_PARSE_REPLY =
   "⚠️ Couldn't parse that confirmation. Please try again, or send a screenshot, PDF, or the full email text.";
@@ -149,7 +150,6 @@ function buildManualPriceSetLine(row, pricePerPerson) {
  */
 async function ingestParsedLegs(bot, msg, legs) {
   const telegramUserId = msg.from?.id != null ? String(msg.from.id) : null;
-  const inserted = [];
   const list = Array.isArray(legs) ? legs : [];
   console.log("ingestParsedLegs: validating extracted legs", {
     count: list.length,
@@ -160,6 +160,7 @@ async function ingestParsedLegs(bot, msg, legs) {
     }))
   });
 
+  const validLegs = [];
   for (let i = 0; i < list.length; i++) {
     const leg = list[i];
     const missing = missingLegFields(leg);
@@ -183,24 +184,10 @@ async function ingestParsedLegs(bot, msg, legs) {
       );
       return;
     }
-    const row = {
-      confirmation_code: String(leg.confirmation_code).trim(),
-      airline: leg.airline,
-      flight_number: String(leg.flight_number).trim(),
-      origin: String(leg.origin).trim().toUpperCase(),
-      destination: String(leg.destination).trim().toUpperCase(),
-      flight_date: leg.flight_date,
-      cabin_class: leg.cabin_class,
-      passengers: leg.passengers,
-      price_paid_per_person: leg.price_paid_per_person,
-      active: true,
-      added_by_telegram_user_id: telegramUserId
-    };
-    await insertWatchedFlight(row);
-    inserted.push(leg);
+    validLegs.push(leg);
   }
 
-  if (!inserted.length) {
+  if (!validLegs.length) {
     console.warn("ingestParsedLegs: no valid legs to insert", {
       count: list.length,
       missingByLeg: list.map((leg, index) => ({
@@ -211,6 +198,31 @@ async function ingestParsedLegs(bot, msg, legs) {
     });
     await bot.sendMessage(msg.chat.id, formatMissingFieldsReply(list));
     return;
+  }
+
+  const fare = assignFareBaselines(validLegs);
+  logIntakeFareBaselines(fare);
+
+  const inserted = [];
+  for (const item of fare.assigned) {
+    const leg = item.leg;
+    const row = {
+      confirmation_code: String(leg.confirmation_code).trim(),
+      airline: leg.airline,
+      flight_number: String(leg.flight_number).trim(),
+      origin: String(leg.origin).trim().toUpperCase(),
+      destination: String(leg.destination).trim().toUpperCase(),
+      flight_date: leg.flight_date,
+      cabin_class: leg.cabin_class,
+      passengers: leg.passengers,
+      price_paid_per_person: item.baseline,
+      is_round_trip: item.is_round_trip,
+      total_fare_paid: item.total_fare_paid,
+      active: true,
+      added_by_telegram_user_id: telegramUserId
+    };
+    await insertWatchedFlight(row);
+    inserted.push({ ...leg, price_paid_per_person: item.baseline });
   }
 
   for (const leg of inserted) {
