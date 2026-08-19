@@ -7,7 +7,7 @@ const {
   getWatchedFlightByConfirmationCode,
   updatePricePaidPerPerson
 } = require("./supabase");
-const { parseConfirmationImage } = require("./parser");
+const { parseConfirmationImage, parseConfirmationPdf } = require("./parser");
 
 const AIRLINE_DISPLAY = {
   DELTA: "DL",
@@ -102,6 +102,55 @@ function buildManualPriceSetLine(row, pricePerPerson) {
 }
 
 /**
+ * Shared ingest for photo and PDF confirmation intake.
+ * @param {import('node-telegram-bot-api')} bot
+ * @param {import('node-telegram-bot-api').Message} msg
+ * @param {object[]} legs
+ */
+async function ingestParsedLegs(bot, msg, legs) {
+  const telegramUserId = msg.from?.id != null ? String(msg.from.id) : null;
+  const inserted = [];
+  for (const leg of legs) {
+    if (!legLooksValid(leg)) continue;
+    const conf = String(leg.confidence || "").toUpperCase();
+    if (conf === "LOW") {
+      await bot.sendMessage(
+        msg.chat.id,
+        "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
+      );
+      return;
+    }
+    const row = {
+      confirmation_code: String(leg.confirmation_code).trim(),
+      airline: leg.airline,
+      flight_number: String(leg.flight_number).trim(),
+      origin: String(leg.origin).trim().toUpperCase(),
+      destination: String(leg.destination).trim().toUpperCase(),
+      flight_date: leg.flight_date,
+      cabin_class: leg.cabin_class,
+      passengers: leg.passengers,
+      price_paid_per_person: leg.price_paid_per_person,
+      active: true,
+      added_by_telegram_user_id: telegramUserId
+    };
+    await insertWatchedFlight(row);
+    inserted.push(leg);
+  }
+
+  if (!inserted.length) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
+    );
+    return;
+  }
+
+  for (const leg of inserted) {
+    await bot.sendMessage(msg.chat.id, buildConfirmLine(leg));
+  }
+}
+
+/**
  * @param {import('node-telegram-bot-api')} bot
  */
 function startBot(bot) {
@@ -118,6 +167,16 @@ function startBot(bot) {
 
   bot.on("message", async (msg) => {
     try {
+      if (msg.document) {
+        console.log("Telegram document update received", {
+          chatId: msg.chat?.id,
+          mimeType: msg.document.mime_type,
+          fileName: msg.document.file_name,
+          fileId: msg.document.file_id,
+          fileSize: msg.document.file_size
+        });
+      }
+
       if (!isAllowedChat(msg)) return;
 
       const text = String(msg.text || "").trim();
@@ -202,6 +261,48 @@ function startBot(bot) {
         return;
       }
 
+      if (msg.document) {
+        if (msg.document.mime_type !== "application/pdf") {
+          await bot.sendMessage(
+            msg.chat.id,
+            "Only PDFs and screenshots are supported."
+          );
+          return;
+        }
+
+        console.log("Entering PDF document intake branch", {
+          chatId: msg.chat?.id,
+          fileName: msg.document.file_name,
+          fileId: msg.document.file_id,
+          fileSize: msg.document.file_size
+        });
+
+        const pdfFileId = msg.document.file_id;
+        const pdfLink = await bot.getFileLink(pdfFileId);
+        const pdfRes = await fetch(pdfLink);
+        if (!pdfRes.ok) {
+          throw new Error(`Telegram file download failed: ${pdfRes.status}`);
+        }
+        const pdfArrayBuf = await pdfRes.arrayBuffer();
+        const pdfBuffer = Buffer.from(pdfArrayBuf);
+
+        let pdfLegs;
+        try {
+          const parsed = await parseConfirmationPdf(pdfBuffer);
+          pdfLegs = parsed.legs;
+        } catch (e) {
+          console.error("parseConfirmationPdf failed:", e);
+          await bot.sendMessage(
+            msg.chat.id,
+            "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
+          );
+          return;
+        }
+
+        await ingestParsedLegs(bot, msg, pdfLegs);
+        return;
+      }
+
       if (!msg.photo || !msg.photo.length) {
         return;
       }
@@ -229,46 +330,7 @@ function startBot(bot) {
         return;
       }
 
-      const telegramUserId = msg.from?.id != null ? String(msg.from.id) : null;
-      const inserted = [];
-      for (const leg of legs) {
-        if (!legLooksValid(leg)) continue;
-        const conf = String(leg.confidence || "").toUpperCase();
-        if (conf === "LOW") {
-          await bot.sendMessage(
-            msg.chat.id,
-            "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-          );
-          return;
-        }
-        const row = {
-          confirmation_code: String(leg.confirmation_code).trim(),
-          airline: leg.airline,
-          flight_number: String(leg.flight_number).trim(),
-          origin: String(leg.origin).trim().toUpperCase(),
-          destination: String(leg.destination).trim().toUpperCase(),
-          flight_date: leg.flight_date,
-          cabin_class: leg.cabin_class,
-          passengers: leg.passengers,
-          price_paid_per_person: leg.price_paid_per_person,
-          active: true,
-          added_by_telegram_user_id: telegramUserId
-        };
-        await insertWatchedFlight(row);
-        inserted.push(leg);
-      }
-
-      if (!inserted.length) {
-        await bot.sendMessage(
-          msg.chat.id,
-          "⚠️ Couldn't parse that confirmation. Please try a clearer screenshot."
-        );
-        return;
-      }
-
-      for (const leg of inserted) {
-        await bot.sendMessage(msg.chat.id, buildConfirmLine(leg));
-      }
+      await ingestParsedLegs(bot, msg, legs);
     } catch (e) {
       console.error("bot message handler error:", e);
       try {
